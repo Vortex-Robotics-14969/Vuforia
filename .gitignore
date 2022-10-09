@@ -5,6 +5,9 @@
 *.aab
 
 !libs/*.aar
+.idea*
+.DS_Store
+*.xml
 
 # Files for the ART/Dalvik VM
 *.dex
@@ -85,3 +88,9 @@ lint/generated/
 lint/outputs/
 lint/tmp/
 # lint/reports/
+TeamCode/src/main/java/org/firstinspires/ftc/teamcode/.DS_Store
+TeamCode/src/main/java/org/firstinspires/ftc/teamcode/.DS_Store
+*.xml
+*.xml
+.idea/misc.xml
+TeamCode/src/main/java/org/firstinspires/ftc/teamcode/.DS_Store
