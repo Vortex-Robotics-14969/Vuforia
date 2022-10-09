@@ -5,6 +5,9 @@
 *.aab
 
 !libs/*.aar
+.idea*
+.DS_Store
+*.xml
 
 # Files for the ART/Dalvik VM
 *.dex
@@ -86,3 +89,6 @@ lint/outputs/
 lint/tmp/
 # lint/reports/
 .DS_Store
+*.xml
+.idea*
+
