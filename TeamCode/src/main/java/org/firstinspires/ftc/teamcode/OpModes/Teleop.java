@@ -1,228 +1,245 @@
 package org.firstinspires.ftc.teamcode.OpModes;
-//imports
-import android.graphics.drawable.GradientDrawable;
-import com.qualcomm.hardware.bosch.BNO055IMU;
-import com.qualcomm.hardware.modernrobotics.ModernRoboticsI2cRangeSensor;
+
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.hardware.CRServo;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
-import com.qualcomm.robotcore.hardware.DistanceSensor;
-import com.qualcomm.robotcore.hardware.PwmControl;
-import com.qualcomm.robotcore.hardware.Servo;
-import com.qualcomm.robotcore.hardware.ServoImplEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
-import com.qualcomm.robotcore.hardware.DcMotor;
-import com.qualcomm.robotcore.hardware.HardwareMap;
-import com.qualcomm.robotcore.hardware.Gamepad;
-import org.firstinspires.ftc.robotcore.external.navigation.Orientation;
 
-import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import java.util.List;
+import org.firstinspires.ftc.robotcore.external.ClassFactory;
+import org.firstinspires.ftc.robotcore.external.navigation.VuforiaLocalizer;
+import org.firstinspires.ftc.robotcore.external.navigation.VuforiaLocalizer.CameraDirection;
+import org.firstinspires.ftc.robotcore.external.tfod.TFObjectDetector;
+import org.firstinspires.ftc.robotcore.external.tfod.Recognition;
 import org.firstinspires.ftc.teamcode.Helper.Robot;
 
-@TeleOp(name = "TeleOp", group = "LinearOpMode")
 
-public class Teleop extends LinearOpMode {
+@Autonomous
+public class VuforiaTest extends LinearOpMode {
 
-    //tells you how long the robot has run for
-    private ElapsedTime runtime = new ElapsedTime();
+   public String stateMachine = "Collect";
+   /*
+   1: Collect[Cone]
+   2: Move[to Pole]
+   3: Place[Cone]
+   (repeat 1-3 as many times as possible)
+   4: Go[to Signal]
+   5: Park
+    */
+   public int conesPlaced = 0;
+   public int quota = 3;
 
-    //this is how you create an instance in a java class ^
+   public int parkingTarget = 3;
+   private ElapsedTime runtime = new ElapsedTime();
+   double timeout_ms = 0;
 
-    //How fast your robot will accelerate.
-    public double acceleration = 0.3;
+   Robot robot = new Robot();
 
-    //Motor powers
-    public double fl_power = 0;
-    public double bl_power = 0;
-    public double fr_power = 0;
-    public double br_power = 0;
+   private static final String TFOD_MODEL_ASSET = "PowerPlay.tflite";
+   // private static final String TFOD_MODEL_FILE  = "/sdcard/FIRST/tflitemodels/CustomTeamModel.tflite";
 
+   private static final String[] LABELS = {
+           "1 Bolt",
+           "2 Bulb",
+           "3 Panel"
+   };
 
-    public double angleOne;
+   private static final String VUFORIA_KEY =
+           "AWtcstb/////AAABmfYaB2Q4dURcmKS8qV2asrhnGIuQxM/ioq6TnYqZseP/c52ZaYTjs4/2xhW/91XEaX7c3aw74P3kGZybIaXued3nGShb7oNQyRkVePnFYbabnU/G8em37JQrH309U1zOYtM3bEhRej91Sq6cf6yLjiSXJ+DxxLtSgWvO5f+wM3Wny8MbGUpVSiogYnI7UxEz8OY88d+hgal9u3GhhISdnNucsL+fRAE8mKwT1jGDgUVE1uAJoZFvo95AJWS2Yhdq/N/HpxEH3sBXEm99ci+mdQsl0m96PMCDfV5RgWBjhLbBEIJyQ/xKAbw5Yfr/AKCeB86WDPhR3+Mr8BUvsrycZA6FDJnN5sZZwTg0ZE22+gFL";
 
-    public double DRIVETRAIN_SPEED = 0.6;
-    public double ramSpeed = 1.0;
+   /**
+    * {@link #vuforia} is the variable we will use to store our instance of the Vuforia
+    * localization engine.
+    */
+   private VuforiaLocalizer vuforia;
 
-
-    Robot robot = new Robot();
-
-
-    @Override
-    public void runOpMode() throws InterruptedException {
-        /**
-         * Instance of Robot class is initalized
-         */
-        robot.init(hardwareMap);
-
-        /**
-         * This code is run during the init phase, and when opMode is not active
-         * i.e. When "INIT" Button is pressed on the Driver Station App
-         */
-
-        //Resets encoder on arm.
-        robot.arm.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
-
-        //telemetry (prints data)
-        while (!opModeIsActive() && !isStopRequested()) {
-            angleOne = robot.getRobotAngle();
-            telemetry.addData("Angle", "%f ", robot.getRobotAngle());
-            telemetry.addData("Robot Angle", "%.1f", angleOne);
-            telemetry.addData("servo position", robot.boxcover.getPosition());
-            telemetry.addData("Arm Current position", robot.arm.getCurrentPosition());
-            telemetry.update();
-        }
-        waitForStart();
+   /**
+    * {@link #tfod} is the variable we will use to store our instance of the TensorFlow Object
+    * Detection engine.
+    */
+   private TFObjectDetector tfod;
 
 
+   @Override
+   public void runOpMode() throws InterruptedException {
+       //Init
+       initVuforia();
+       initTfod();
+       robot.init(hardwareMap);
+       if (tfod != null) {
+           tfod.activate();
+           // The TensorFlow software will scale the input images from the camera to a lower resolution.
+           // This can result in lower detection accuracy at longer distances (> 55cm or 22").
+           // If your target is at distance greater than 50 cm (20") you can increase the magnification value
+           // to artificially zoom in to the center of image.  For best results, the "aspectRatio" argument
+           // should be set to the value of the images used to create the TensorFlow Object Detection model
+           // (typically 16/9).
+           tfod.setZoom(1.0, 16.0/9.0);
+       }
 
-        while (opModeIsActive()) {
+       telemetry.addData(">", "Press Play to start op mode");
+       telemetry.update();
+       waitForStart();
 
+       if (opModeIsActive()) {
 
-            // Move the robot.
+           while (opModeIsActive()) {
+               switch(stateMachine) {
+                   case "Detect":
+                       List<Recognition> updatedRecognitions = tfod.getUpdatedRecognitions();
+                       if(updatedRecognitions != null) {
+                           telemetry.addData("# Objects Detected", updatedRecognitions.size());
+                           for(Recognition rec : updatedRecognitions) {
+                               double col = (rec.getRight() + rec.getLeft()) / 2;
+                               double row = (rec.getBottom() + rec.getTop()) / 2;
+                               double width = Math.abs(rec.getRight() - rec.getLeft());
+                               double height = Math.abs(rec.getTop() - rec.getBottom());
+                               String objLabel = rec.getLabel();
+                               int i = 0;
+                               for(String check : LABELS) {
+                                   if(objLabel == check) {
+                                       parkingTarget = i;
+                                   }
+                                   i++;
+                               }
+                               telemetry.addData("", " ");
+                               telemetry.addData("Image", "%s (%.0f %% Conf.)", rec.getLabel(), rec.getConfidence() * 100);
+                               telemetry.addData("- Position (Row/Col)", "%.0f / %.0f", row, col);
+                               telemetry.addData("- Size (Width/Height)", "%.0f / %.0f", width, height);
+                               telemetry.addData("Parking Target", parkingTarget);
+                           }
+                           telemetry.update();
+                       }
+                       stateMachine = "Collect";
+                       break;
+                   case "Collect":
+                       robot.turn(90);
+                       robot.startDriveToPosition(4,2);
+                       robot.openClaw();
+                       robot.moveArmToTarget(1,3);
+                       robot.closeClaw();
+                       robot.moveArmToTarget(1,-3);
+                       stateMachine = "Move";
+                       robot.turn(270);
+                       break;
+                   case "Move":
+                   //Really just making up numbers here. Need to do some tests to detirmine actual distances
+                   robot.startDriveToPosition(10,2);
+                   robot.turnRobot(90);
+                   robot.startDriveToPosition(10,2);
+                   stateMachine = "Place";
+                   break;
+                   case "Place":
+                       /*
+                       Low
+                       Med
+                       High
+                        */
+                       String targetPole = "Low";
+                       //Raise the Crane
+                       switch(targetPole) {
+                           //Values are based off the FTC Sim. Have to reevaluate for our purposes.
+                           case "Low":
+                               robot.raiseCrane(2,200);
+                               break;
+                           case "Med":
+                               robot.raiseCrane(4,700);
+                               break;
+                           case "High":
+                               robot.raiseCrane(6,700);
+                               break;
+                           default:
+                               throw new Error(targetPole + "is not a valid Pole Height");
+                       }
+                       //Time to Extend the Arm
+                       robot.moveArmToTarget(2, 10);
+                       robot.openClaw();
+                       robot.closeClaw();
+                       robot.moveArmToTarget(2,0);
+                       robot.raiseCrane(2,0);
+                       //Need to write retraction method
+                       conesPlaced++;
+                       if(conesPlaced >= quota) {
+                           stateMachine = "Park";
+                       }
+                       else {
+                         stateMachine = "Collect";
+                       }
+                       robot.turnRobot(90);
+                       robot.startDriveToPosition(10,3);
+                       robot.turnRobot(90);
+                       robot.startDriveToPosition(10,3);
+                       robot.turnRobot(90);
+                       break;
+                   case "Park":
+                       //Code to return to starting position
+                       switch(parkingTarget) {
+                           case 0:
+                               runtime.reset();
+                               timeout_ms = 3000;
+                               robot.startDriveToPosition(0.3,0.9);
+                               while(opModeIsActive() && (runtime.milliseconds() < timeout_ms) && robot.FLMotor.isBusy() && robot.FRMotor.isBusy()) {};
+                               robot.stopDriveMotors();
+                               sleep(300);
+                               break;
+                           case 1:
+                               runtime.reset();
+                               timeout_ms = 3000;
+                               robot.startStrafeToPosition(0.3,-60);
+                               while(opModeIsActive() && (runtime.milliseconds() < timeout_ms) && robot.FLMotor.isBusy() && robot.FRMotor.isBusy()) {};
+                               robot.stopDriveMotors();
+                               sleep(300);
+                               break;
+                           case 2:
+                               runtime.reset();
+                               timeout_ms = 3000;
+                               robot.startDriveToPosition(0.3,90);
+                               while(opModeIsActive() && (runtime.milliseconds() < timeout_ms) && robot.FLMotor.isBusy() && robot.FRMotor.isBusy()) {};
+                               robot.stopDriveMotors();
+                               sleep(300);
+                               break;
+                           default:
+                               throw new Error("Invalid Parking Target");
+                       }
+                       break;
+               }
+           }
+       }
+   }
 
-            //Variables to hold joystick values.
-            double move_y_axis = gamepad1.left_stick_y;
-            double move_x_axis = -gamepad1.left_stick_x;
-            double pivot_turn = -gamepad1.right_stick_x;
-            double slider_power = gamepad2.right_stick_y;
+   /**
+    * Initialize the Vuforia localization engine.
+    */
+   private void initVuforia() {
+       /*
+        * Configure Vuforia by creating a Parameter object, and passing it to the Vuforia engine.
+        */
+       VuforiaLocalizer.Parameters parameters = new VuforiaLocalizer.Parameters();
 
-            //Sets the target power
-            double target_fl_power = move_y_axis + move_x_axis + pivot_turn;
-            double target_bl_power = move_y_axis - move_x_axis + pivot_turn;
-            double target_fr_power = move_y_axis - move_x_axis - pivot_turn;
-            double target_br_power = move_y_axis + move_x_axis - pivot_turn;
+       parameters.vuforiaLicenseKey = VUFORIA_KEY;
+       parameters.cameraDirection = CameraDirection.BACK;
 
-            //Adds how far you are from target power, times acceleration to the current power.
-            fl_power += acceleration * (target_fl_power - fl_power);
-            bl_power += acceleration * (target_bl_power - bl_power);
-            fr_power += acceleration * (target_fr_power - fr_power);
-            br_power += acceleration * (target_br_power - br_power);
+       //  Instantiate the Vuforia engine
+       vuforia = ClassFactory.getInstance().createVuforia(parameters);
+   }
 
-            /**
-             * Purpose: Teleop Chassis movement
-             * Control :
-             * - gamepad1.left_stick_y for moving forward and backword
-             * - gamepad1.left_stick_x for strafing left and right
-             * - gamepad1.right_stick_x for rotating the robot
-             * Power: Power adjusting based on applying the force on the sticks
-             */
+   /**
+    * Initialize the TensorFlow Object Detection engine.
+    */
+   private void initTfod() {
+       int tfodMonitorViewId = hardwareMap.appContext.getResources().getIdentifier(
+               "tfodMonitorViewId", "id", hardwareMap.appContext.getPackageName());
+       TFObjectDetector.Parameters tfodParameters = new TFObjectDetector.Parameters(tfodMonitorViewId);
+       tfodParameters.minResultConfidence = 0.75f;
+       tfodParameters.isModelTensorFlow2 = true;
+       tfodParameters.inputSize = 300;
+       tfod = ClassFactory.getInstance().createTFObjectDetector(tfodParameters, vuforia);
 
-            robot.FLMotor.setPower(DRIVETRAIN_SPEED * fl_power);
-            robot.BLMotor.setPower(DRIVETRAIN_SPEED * bl_power);
-            robot.FRMotor.setPower(DRIVETRAIN_SPEED * fr_power);
-            robot.BRMotor.setPower(DRIVETRAIN_SPEED * br_power);
-
-            //Used to ram into other robots blocking our path.
-            while (gamepad1.right_trigger>0){
-                robot.FLMotor.setPower(ramSpeed * fl_power);
-                robot.BLMotor.setPower(ramSpeed * bl_power);
-                robot.FRMotor.setPower(ramSpeed * fr_power);
-                robot.BRMotor.setPower(ramSpeed * br_power);
-            }
-
-
-
-
-            /**
-             * Purpose: Move Intake mechanism to intake or outtake. Both drivers have the control.
-             */
-
-            if (gamepad2.right_bumper || gamepad1.right_bumper) {
-                robot.sIntake.setPower(-0.3);
-
-            }
-
-            else if (gamepad2.left_bumper || gamepad1.left_bumper) {
-                // robot.turnIntake(1, 1);
-                robot.sIntake.setPower(1);
-
-            }
-
-            else {
-                robot.sIntake.setPower(0);
-            }
-
-            /**
-             * Purpose:
-             * Swing the arm to the front position to intake and pick up freight.
-             */
-            if (gamepad2.a) {
-                robot.arm.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-                robot.arm.setDirection(DcMotorSimple.Direction.REVERSE);
-                robot.moveArmToTarget(1, 1);
-                robot.arm.setPower(0);
-            }
-
-            /**
-             * Purpose:
-             * Swing the arm to the back position and deliver
-             */
-            if (gamepad2.b) {
-                robot.arm.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-                robot.arm.setDirection(DcMotorSimple.Direction.FORWARD);
-                robot.moveArmToTarget(3, 1);
-                robot.arm.setPower(0);
-            }
-
-            while (gamepad2.right_trigger>0){
-                robot.arm.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-                robot.arm.setPower(0.6);
-            }
-            while (gamepad2.left_trigger>0){
-                robot.arm.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-                robot.arm.setPower(0.6);
-            }
-            /**
-             * Place the pulley at specific height or adjust manually.
-             */
-            double pulley_holding_power = 0.1;
-
-            if(gamepad2.dpad_down){ // Deliver to shared hub.
-                robot.movePulleyToTarget(4, 1);
-            }
-            else if(gamepad2.dpad_up){ //Move to level 3 for delivery to alliance hub.
-                robot.movePulleyToTarget(3, 1);
-            }
-            else { // Manual control.
-                robot.pulley.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-                slider_power = gamepad2.right_stick_y * 0.7;
-                robot.pulley.setPower(-slider_power+pulley_holding_power);
-            }
-
-
-
-            /**
-             * Purpose:
-             * Spin the carousel and deliver the duck for red side
-             */
-            if (gamepad2.x) {
-                robot.startDriveToPosition(0.5, 50);
-                robot.startStrafeToPosition(0.5, 50);
-                robot.startDriveToPosition(0.5, -50);
-                robot.startStrafeToPosition(0.5, -50);
-            }
-
-            /**
-             * Purpose:
-             * Spin the carousel and deliver the duck for blue side
-             */
-            if (gamepad2.y) {
-                robot.claw.setPosition(0);
-            }
-
-            // telemetry
-            telemetry.addData("Angle", "%f ", robot.getRobotAngle());
-            telemetry.addData("ARM Current position", robot.arm.getCurrentPosition());
-            telemetry.addData("Pulley Current Position ", robot.pulley.getCurrentPosition());
-            telemetry.addData("Claw Current Postition", robot.claw.getPosition());
-            telemetry.update();
-            idle();
-
-
-        }
-
-    }
+       // Use loadModelFromAsset() if the TF Model is built in as an asset by Android Studio
+       // Use loadModelFromFile() if you have downloaded a custom team model to the Robot Controller's FLASH.
+       tfod.loadModelFromAsset(TFOD_MODEL_ASSET, LABELS);
+       // tfod.loadModelFromFile(TFOD_MODEL_FILE, LABELS);
+   }
 }
+
